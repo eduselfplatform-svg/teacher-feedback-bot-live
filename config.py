@@ -42,5 +42,13 @@ ADMIN_IDS = {
 RUN_MODE = os.getenv("RUN_MODE", "polling").strip().lower()
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
-PORT = int(os.getenv("PORT", "8080"))
-CONVERSATION_TIMEOUT_SECONDS = int(os.getenv("CONVERSATION_TIMEOUT_SECONDS", "1800"))
+try:
+    PORT = int(os.getenv("PORT", "8080"))
+except (ValueError, TypeError):
+    PORT = 8080
+
+try:
+    CONVERSATION_TIMEOUT_SECONDS = int(os.getenv("CONVERSATION_TIMEOUT_SECONDS", "1800"))
+except (ValueError, TypeError):
+    CONVERSATION_TIMEOUT_SECONDS = 1800
+

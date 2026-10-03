@@ -1,5 +1,7 @@
 import logging
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -18,6 +20,36 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("feedback_bot")
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Render Web Service port tekshiruvi va monitoring uchun yengil HTTP handler."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK - Telegram Bot is running!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        # Render port scanner va health check so'rovlari logni to'ldirib yubormasligi uchun
+        return
+
+
+def start_health_check_server(port: int):
+    """Render Web Service port scan muvaffaqiyatli o'tishi uchun fon rejimida server ochadi."""
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info("Health check server 0.0.0.0:%d da muvaffaqiyatli ishga tushirildi.", port)
+    except Exception as e:
+        logger.warning("Health check serverini ishga tushirishda xatolik: %s", e)
 
 
 def build_application():
@@ -71,8 +103,11 @@ def main():
         )
     else:
         logger.info("Bot polling rejimida ishga tushmoqda...")
+        # Render Web Service uchun portni ochiq ushlab turish
+        start_health_check_server(config.PORT)
         app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     main()
+
