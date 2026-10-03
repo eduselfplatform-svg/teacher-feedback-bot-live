@@ -99,19 +99,19 @@ finally:
         os.remove(test_file)
     storage.USERS_FILE = "users.json"
 
-print("\n7. Health Check Web Server tekshiruvi:")
-import urllib.request
-test_port = 8765
-main.start_health_check_server(test_port)
-try:
-    with urllib.request.urlopen(f"http://127.0.0.1:{test_port}/") as resp:
-        body = resp.read().decode("utf-8")
-        assert resp.status == 200, f"Kutilgan status 200, lekin {resp.status}"
-        assert "OK" in body, f"Kutilgan javobda 'OK' bo'lishi kerak, lekin {body}"
-        print(f"  [OK] Health check server 127.0.0.1:{test_port} da javob berdi: status 200, body: '{body}'")
-except Exception as err:
-    print(f"  [XATO] Health check server bilan bog'lanishda xato: {err}")
-    raise
+print("\n7. FastAPI & Uvicorn Web Server tekshiruvi:")
+from fastapi.testclient import TestClient
+client = TestClient(main.app)
+resp = client.get("/health")
+assert resp.status_code == 200, f"Kutilgan status 200, lekin {resp.status_code}"
+assert resp.json().get("status") == "healthy"
+print(f"  [OK] /health endpointi muvaffaqiyatli javob berdi: {resp.json()}")
+
+root_resp = client.get("/")
+assert root_resp.status_code == 200
+assert root_resp.json().get("status") == "healthy"
+print(f"  [OK] / (root) endpointi muvaffaqiyatli javob berdi: {root_resp.json()}")
 
 print("\nBarcha testlar muvaffaqiyatli o'tdi! [PASSED]")
+
 

@@ -101,6 +101,10 @@ CONVERSATION_TIMEOUT_SECONDS=1800
 ### 4. Botni ishga tushirish
 
 ```bash
+# Uvicorn orqali (tavsiya etiladi):
+uvicorn main:app --host 0.0.0.0 --port 8080
+
+# Yoki to'g'ridan-to'g'ri python orqali:
 python main.py
 ```
 
@@ -108,9 +112,14 @@ python main.py
 
 ## 🚀 Render.com orqali Deploy qilish
 
-Loyiha Render.com uchun to'liq tayyorlangan (`render.yaml` va `Procfile` mavjud):
+Loyiha Render.com uchun **Web Service (FastAPI + Uvicorn)** sifatida to'liq tayyorlangan (`render.yaml` va `Procfile` mavjud):
 
 1. Repozitoriyingizni GitHub'ga yuklang.
-2. Render.com da yangi **Blueprint** yarating va ushbu repozitoriyga ulang.
-3. Dashboard orqali maxfiy o'zgaruvchilarni (`BOT_TOKEN`, `CHANNEL_ID`, `ANONYMOUS_CHANNEL_ID`, `NAMED_CHANNEL_ID`) kiriting.
-4. Render loyihani avtomatik ishga tushiradi.
+2. Render.com da yangi **Web Service** (yoki **Blueprint**) yarating va ushbu repozitoriyga ulang.
+3. Sozlamalar:
+   - **Environment:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Health Check Path:** `/health`
+4. Dashboard orqali muhit o'zgaruvchilarini (`BOT_TOKEN`, `CHANNEL_ID`, `ANONYMOUS_CHANNEL_ID`, `NAMED_CHANNEL_ID`, `ADMIN_IDS`) kiriting.
+5. Render avtomatik ravishda Uvicorn orqali portni ochadi, `/health` tekshiruvidan muvaffaqiyatli o'tadi va botni ishga tushiradi.

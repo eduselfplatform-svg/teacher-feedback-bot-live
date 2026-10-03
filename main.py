@@ -1,7 +1,8 @@
 import logging
 import sys
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Response, status
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -9,6 +10,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+import uvicorn
 import config
 from handlers.start import start_command, check_subscription_callback, admin_command
 from handlers.conversation import feedback_conversation
@@ -21,42 +23,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("feedback_bot")
 
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Render Web Service port tekshiruvi va monitoring uchun yengil HTTP handler."""
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"OK - Telegram Bot is running!")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        # Render port scanner va health check so'rovlari logni to'ldirib yubormasligi uchun
-        return
-
-
-def start_health_check_server(port: int):
-    """Render Web Service port scan muvaffaqiyatli o'tishi uchun fon rejimida server ochadi."""
-    try:
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        logger.info("Health check server 0.0.0.0:%d da muvaffaqiyatli ishga tushirildi.", port)
-    except Exception as e:
-        logger.warning("Health check serverini ishga tushirishda xatolik: %s", e)
+ptb_app = None
 
 
 def build_application():
     """Telegram bot ilovasini sozlaydi va handlerlarni ro'yxatdan o'tkazadi."""
     if not config.BOT_TOKEN:
         logger.error("BOT_TOKEN aniqlanmadi! Botni ishga tushirishdan oldin .env faylini to'ldiring.")
-        sys.exit(1)
+        return None
 
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
 
@@ -82,32 +56,103 @@ def build_application():
     return app
 
 
-def main():
-    """Botni ishga tushirish (Polling yoki Webhook)."""
-    app = build_application()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI va Uvicorn bilan birga Telegram botning hayot siklini boshqarish."""
+    global ptb_app
+    ptb_app = build_application()
 
-    if config.RUN_MODE == "webhook":
-        logger.info(
-            "Bot webhook rejimida ishga tushmoqda (Port: %d, Webhook URL: %s)...",
-            config.PORT,
-            config.WEBHOOK_URL,
-        )
-        webhook_path = config.BOT_TOKEN
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=config.PORT,
-            url_path=webhook_path,
-            webhook_url=f"{config.WEBHOOK_URL}/{webhook_path}",
-            secret_token=config.WEBHOOK_SECRET if config.WEBHOOK_SECRET else None,
-            drop_pending_updates=True,
-        )
+    if ptb_app:
+        await ptb_app.initialize()
+
+        if config.RUN_MODE == "webhook":
+            if config.WEBHOOK_URL:
+                webhook_url = f"{config.WEBHOOK_URL.rstrip('/')}/webhook"
+                await ptb_app.bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=config.WEBHOOK_SECRET or None,
+                    drop_pending_updates=True,
+                )
+                logger.info("Telegram Webhook muvaffaqiyatli o'rnatildi: %s", webhook_url)
+            await ptb_app.start()
+            logger.info("Bot webhook rejimida ishga tushirildi.")
+        else:
+            # Polling rejimida: avvalgi webhooklarni tozalab, pollingni boshlaymiz
+            await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+            await ptb_app.start()
+            await ptb_app.updater.start_polling(drop_pending_updates=True)
+            logger.info("Bot polling rejimida ishga tushirildi.")
     else:
-        logger.info("Bot polling rejimida ishga tushmoqda...")
-        # Render Web Service uchun portni ochiq ushlab turish
-        start_health_check_server(config.PORT)
-        app.run_polling(drop_pending_updates=True)
+        logger.warning("BOT_TOKEN mavjud emasligi sababli Telegram bot ishga tushirilmadi.")
+
+    yield
+
+    # Server to'xtatilganda resurslarni xavfsiz yopish
+    if ptb_app:
+        logger.info("Telegram bot to'xtatilmoqda...")
+        if config.RUN_MODE != "webhook":
+            if ptb_app.updater and ptb_app.updater.running:
+                await ptb_app.updater.stop()
+        if ptb_app.running:
+            await ptb_app.stop()
+        await ptb_app.shutdown()
+        logger.info("Telegram bot to'liq to'xtatildi.")
+
+
+app = FastAPI(
+    title="Teacher Feedback Bot API",
+    lifespan=lifespan,
+)
+
+
+@app.get("/")
+@app.get("/health")
+async def health_check():
+    """Render port tekshiruvi va monitoring uchun health-check endpointi."""
+    return {
+        "status": "healthy",
+        "bot": "running" if (ptb_app and ptb_app.running) else "ready",
+        "mode": config.RUN_MODE,
+    }
+
+
+@app.post("/webhook")
+@app.post("/telegram")
+async def telegram_webhook(request: Request):
+    """Telegram Webhook so'rovlarini qabul qilish endpointi."""
+    if not ptb_app:
+        return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content="Bot not ready")
+
+    if config.WEBHOOK_SECRET:
+        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if secret != config.WEBHOOK_SECRET:
+            return Response(status_code=status.HTTP_403_FORBIDDEN, content="Invalid secret token")
+
+    try:
+        data = await request.json()
+        update = Update.de_json(data, ptb_app.bot)
+        await ptb_app.process_update(update)
+        return Response(status_code=status.HTTP_200_OK, content="OK")
+    except Exception as e:
+        logger.error("Webhook xatoligi: %s", e)
+        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+if config.BOT_TOKEN:
+    app.add_api_route(f"/{config.BOT_TOKEN}", telegram_webhook, methods=["POST"])
+
+
+def main():
+    """Lokal yoki to'g'ridan-to'g'ri python orqali ishga tushirish uchun yordamchi funksiya."""
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=config.PORT,
+        reload=False,
+    )
 
 
 if __name__ == "__main__":
     main()
+
 
